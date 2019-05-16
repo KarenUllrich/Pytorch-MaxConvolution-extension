@@ -3,7 +3,7 @@ from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair
 
-import max_convolution2d_backend as max_convolution2d
+import max_convolution2d_sampler_backend as max_convolution2d
 
 
 def max_conv2d(input,
@@ -46,7 +46,7 @@ class MaxConvolutionFunction(Function):
         # self.save_for_backward(input, weight)
         kH, kW = self.kernel_size
         padH, padW = self.padding
-
+        # TODO(karen) assert warning for wrong padding
         output = max_convolution2d.forward(input, weight, kH, kW, padH, padW)
 
         return output

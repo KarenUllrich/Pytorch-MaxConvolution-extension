@@ -2,32 +2,32 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from os.path import join
 
-project_root = 'Correlation_Module'
-sources = [join(project_root, file) for file in ['correlation.cpp',
-                                                 'correlation_sampler.cpp',
-                                                 'correlation_cuda_kernel.cu']]
+project_root = 'MaxConvolution_Module'
+sources = [join(project_root, file) for file in ['max_convolution2d.cpp',
+                                                 'max_convolution2d_sampler.cpp',
+                                                 'max_convolution2d_cuda_kernel.cu']]
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(
-    name='spatial_correlation_sampler',
+    name='max_convolution2d',
     version="0.1.0",
-    author="Clément Pinard",
-    author_email="clement.pinard@ensta-paristech.fr",
-    description="Correlation module for pytorch",
+    author="Karen Ullrich",
+    author_email="karn.ullrich@gmail.com",
+    description="Max Convolution  module for pytorch",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/ClementPinard/Pytorch-Correlation-extension",
+    url="https://github.com/KarenUllrich/Pytorch-MaxConvolution-extension",
     install_requires=['torch>=1.0.1','numpy'],
     ext_modules=[
-        CUDAExtension('spatial_correlation_sampler_backend',
+        CUDAExtension('max_convolution2d_sampler_backend',
                       sources,
                       extra_compile_args={'cxx': ['-fopenmp'], 'nvcc':[]},
                       extra_link_args=['-lgomp'])
     ],
     package_dir={'': project_root},
-    packages=['spatial_correlation_sampler'],
+    packages=['max_convolution2d'],
     cmdclass={
         'build_ext': BuildExtension
     },
