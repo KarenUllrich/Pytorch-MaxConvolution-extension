@@ -1,3 +1,4 @@
+import math
 from torch import nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
@@ -46,7 +47,8 @@ class MaxConvolutionFunction(Function):
         # self.save_for_backward(input, weight)
         kH, kW = self.kernel_size
         padH, padW = self.padding
-        # TODO(karen) assert warning for wrong padding
+        assert math.log2(input.size(2) + 2 * padH) % kH == 0, "Kernel and Padding do not fit striding requirement."
+        assert math.log2(input.size(3) + 2 * padW) % kW == 0, "Kernel and Padding do not fit striding requirement."
         output = max_convolution2d.forward(input, weight, kH, kW, padH, padW)
 
         return output
