@@ -1,12 +1,13 @@
 #include <algorithm>
+#include <utility>      // std::pair
 #include <torch/extension.h>
 #include <ATen/ATen.h>
 using namespace at;
+using namespace std;
 
 #include <vector>
 
 #define WITHIN_BOUNDS(x, H) (x >= 0 && x < H)
-#define ARGMAX(x) (std::distance(x.begin(), std::max_element(x.begin(), x.end())))
 
 template <typename scalar_t>
 static void convolve_patch(
@@ -21,8 +22,9 @@ static void convolve_patch(
   const int kH = weight.size(0);
   const int kW = weight.size(1);
 
-  auto interim1 = at::zeros({iC}, input.options());
-  auto interim2 = at::zeros({kH, kW}, input.options());
+  auto interim1 = at::zeros({iC});
+  auto interim2 = at::zeros({kH,kW});
+  auto interim_sum = at::zeros({1});
 
   for (int i=0; i<kH; ++i){
     int ii = h * kH + i;
@@ -35,19 +37,19 @@ static void convolve_patch(
             scalar_t w = weight[i][j];
             interim1[c] = inp + w;
           }
-         iterim2[i][j] = max_element(iterim1)
-         output2[i][j] = ARGMAX(iterim1)
+         interim2[i][j] = std::max_element(interim1, interim1 + iC);
+         output2[i][j] = std::distance(interim1, std::max_element(interim1, interim1 + iC));
         }
       }
     }
   }
-  auto interim_sum = at::zeros({1}, input.options());
+
   for (int i=0; i<kH; ++i){
     for (int j=0; j<kW; ++j){
-       iterim_sum += iterim2[i][j]
+       interim_sum += interim2[i][j];
     }
   }
-  *output1 =  iterim_sum;
+  *output1 =  interim_sum;
 }
 
 
@@ -90,5 +92,5 @@ torch::Tensor max_convolution2d_cpp_forward(
           }));
       }
     }
-  return output1, output2;
+  return std::make_pair (output1, output2);
 }
