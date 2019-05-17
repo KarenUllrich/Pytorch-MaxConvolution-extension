@@ -6,13 +6,13 @@
 
 // declarations
 
-std::pair<torch::Tensor, torch::Tensor> max_convolution2d_cuda_forward(
+std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cuda_forward(
     torch::Tensor input,
     torch::Tensor weight,
     int kH, int kW,
     int padH, int padW);
 
-std::pair<torch::Tensor, torch::Tensor> max_convolution2d_cpp_forward(
+std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cpp_forward(
     torch::Tensor input,
     torch::Tensor weight,
     int kH, int kW,
@@ -25,7 +25,7 @@ std::pair<torch::Tensor, torch::Tensor> max_convolution2d_cpp_forward(
 #define CHECK_CONTIGUOUS(x) AT_CHECK(x.is_contiguous(), #x, " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
-std::pair<torch::Tensor, torch::Tensor> max_convolution2d_sample_forward(
+std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_sample_forward(
     torch::Tensor input,
     torch::Tensor weight,
     int kH, int kW,

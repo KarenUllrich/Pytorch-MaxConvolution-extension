@@ -15,45 +15,47 @@ static void convolve_patch(
     TensorAccessor<scalar_t,2> weight,
     scalar_t *output1,
     TensorAccessor<scalar_t,2> output2,
-    int h, int w){
+    int h, int w,
+    int padH, int padW){
   const int iC = input.size(0);
   const int iH = input.size(1);
   const int iW = input.size(2);
   const int kH = weight.size(0);
   const int kW = weight.size(1);
 
-  auto interim1 = at::zeros({iC});
-  auto interim2 = at::zeros({kH,kW});
-  auto interim_sum = at::zeros({1});
+  scalar_t interim1[iC];
+  torch::Tensor interim2 = at::zeros({kH,kW});
+  scalar_t interim_sum;
 
   for (int i=0; i<kH; ++i){
-    int ii = h * kH + i;
+    int ii = h * kH + i - padH;
     if WITHIN_BOUNDS(ii, iH){
       for (int j=0; j<kW; ++j){
-        int ij = w * kW + j;
+        int ij = w * kW + j -padW;
         if WITHIN_BOUNDS(ij, iW){
           for (int c=0; c<iC; ++c){
             scalar_t inp = input[c][ii][ij];
             scalar_t w = weight[i][j];
             interim1[c] = inp + w;
           }
-         interim2[i][j] = std::max_element(interim1, interim1 + iC);
-         output2[i][j] = std::distance(interim1, std::max_element(interim1, interim1 + iC));
+         auto max_p = std::max_element(interim1, interim1 + iC);
+         interim2[i][j] = *max_p;
+         output2[i][j] = std::distance(interim1, max_p);
         }
       }
     }
   }
-
+  auto interim2_acc = interim2.accessor<scalar_t, 2>();
   for (int i=0; i<kH; ++i){
     for (int j=0; j<kW; ++j){
-       interim_sum += interim2[i][j];
+       interim_sum += interim2_acc[i][j];
     }
   }
   *output1 =  interim_sum;
 }
 
 
-torch::Tensor max_convolution2d_cpp_forward(
+std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cpp_forward(
     torch::Tensor input,
     torch::Tensor weight,
     int padH, int padW) {
@@ -86,7 +88,8 @@ torch::Tensor max_convolution2d_cpp_forward(
                                weight_acc[c],
                                &output1_acc[n][c][h][w],
                                output2_acc[n][c][h][w],
-                               h, w);
+                               h, w,
+                               padH, padW);
               }
             }
           }));
