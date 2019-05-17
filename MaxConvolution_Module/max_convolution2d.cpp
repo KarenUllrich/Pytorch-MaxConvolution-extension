@@ -5,7 +5,7 @@ using namespace at;
 
 #include <vector>
 
-#define WITHIN_BOUNDS(x, y, H, W) (x >= 0 && x < W && y >= 0 && y < H)
+#define WITHIN_BOUNDS(x, H) (x >= 0 && x < H)
 #define ARGMAX(x) (std::distance(x.begin(), std::max_element(x.begin(), x.end())))
 
 template <typename scalar_t>
@@ -26,10 +26,10 @@ static void convolve_patch(
 
   for (int i=0; i<kH; ++i){
     int ii = h * kH + i;
-    if WITHIN_BOUNDS(i1, i2, iH, iH){
+    if WITHIN_BOUNDS(ii, iH){
       for (int j=0; j<kW; ++j){
         int ij = w * kW + j;
-        if WITHIN_BOUNDS(j1, j2, iW, iW){
+        if WITHIN_BOUNDS(ij, iW){
           for (int c=0; c<iC; ++c){
             scalar_t inp = input[c][ii][ij];
             scalar_t w = weight[i][j];
