@@ -1,3 +1,4 @@
+#include <limits>
 #include <algorithm>
 #include <utility>      // std::pair
 #include <torch/extension.h>
@@ -8,6 +9,7 @@ using namespace std;
 #include <vector>
 
 #define WITHIN_BOUNDS(x, H) (x >= 0 && x < H)
+#define KEEP_MAX()
 
 template <typename scalar_t>
 static void convolve_patch(
@@ -17,14 +19,17 @@ static void convolve_patch(
     TensorAccessor<scalar_t,2> output2,
     int h, int w,
     int padH, int padW){
+  // get params
   const int iC = input.size(0);
   const int iH = input.size(1);
   const int iW = input.size(2);
   const int kH = weight.size(1);
   const int kW = weight.size(2);
 
-  scalar_t interim1[iC];
-  torch::Tensor interim2 = at::zeros({kH,kW});
+  scalar_t max_p;
+  scalar_t p;
+  torch::Tensor interim_max = at::zeros({kH,kW});
+  torch::Tensor interim_argmax = at::zeros({kH,kW});
   scalar_t interim_sum;
   interim_sum = 0;
 
@@ -34,22 +39,26 @@ static void convolve_patch(
       for (int j=0; j<kW; ++j){
         int ij = w * kW + j -padW;
         if WITHIN_BOUNDS(ij, iW){
+          max_p = - std::numeric_limits<float>::infinity();
           for (int c=0; c<iC; ++c){
             scalar_t inp = input[c][ii][ij];
             scalar_t wei = weight[c][i][j];
-            interim1[c] = inp + wei;
+            p = inp + wei;
+            if (p > max_p){
+              max_p = p;
+              interim_max[i][j] = p;
+              interim_argmax[i][j] = c;
+            }
           }
-         auto max_p = std::max_element(interim1, interim1 + iC);
-         interim2[i][j] = *max_p;
-         output2[i][j] = std::distance(interim1, max_p);
         }
       }
     }
   }
-  auto interim2_acc = interim2.accessor<scalar_t, 2>();
+  output2 = interim_argmax.accessor<scalar_t, 2>();
+  auto interim_max_acc = interim_max.accessor<scalar_t, 2>();
   for (int i=0; i<kH; ++i){
     for (int j=0; j<kW; ++j){
-       interim_sum += interim2_acc[i][j];
+       interim_sum += interim_max_acc[i][j];
     }
   }
   *output1 =  interim_sum;

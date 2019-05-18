@@ -9,7 +9,6 @@ import max_convolution2d_sampler_backend as max_convolution2d
 
 def max_conv2d(input,
                weight,
-               kernel_size=2,
                padding=0):
     """Apply max-convolution to the input.
 
@@ -19,8 +18,6 @@ def max_conv2d(input,
     Args:
         input : The first parameter.
         weight : The second parameter.
-        kernel_size : total size of your correlation kernel, in pixels
-            height and width
         padding : padding applied to input1 and input2 before applying
             the correlation sampling, will modify output height and width
 
@@ -28,6 +25,7 @@ def max_conv2d(input,
         Tensor: Result of max-convolution
 
     """
+    kernel_size = (weight.size(2),weight.size(3))
     max_convolution_func = MaxConvolutionFunction(kernel_size,
                                                   padding)
     return max_convolution_func(input, weight)
@@ -49,7 +47,7 @@ class MaxConvolutionFunction(Function):
         padH, padW = self.padding
         assert math.log2(input.size(2) + 2 * padH) % kH == 0, "Kernel and Padding do not fit striding requirement."
         assert math.log2(input.size(3) + 2 * padW) % kW == 0, "Kernel and Padding do not fit striding requirement."
-        output = max_convolution2d.forward(input, weight, kH, kW, padH, padW)
+        output = max_convolution2d.forward(input, weight, padH, padW)
 
         return output
 
@@ -59,10 +57,9 @@ class MaxConvolutionFunction(Function):
 
 
 class MaxConv2d(nn.Module):
-    def __init__(self, kernel_size=1, padding=0):
+    def __init__(self, padding=0):
         super(MaxConv2d, self).__init__()
-        self.kernel_size = kernel_size
         self.padding = padding
 
     def forward(self, input, weight):
-        return max_conv2d(input, weight, self.kernel_size, self.padding)
+        return max_conv2d(input, weight, self.padding)

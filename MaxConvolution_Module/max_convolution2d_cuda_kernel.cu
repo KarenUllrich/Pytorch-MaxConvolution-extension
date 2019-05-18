@@ -14,79 +14,76 @@ using namespace at;
 #define TensorAcc4R PackedTensorAccessor<scalar_t,4,RestrictPtrTraits,int32_t>
 #define TensorAcc5R PackedTensorAccessor<scalar_t,5,RestrictPtrTraits,int32_t>
 #define TensorAcc6R PackedTensorAccessor<scalar_t,6,RestrictPtrTraits,int32_t>
-#define WITHIN_BOUNDS(x, y, H, W) (x >= 0 && x < H && y >= 0 && y < W)
+#define WITHIN_BOUNDS(x, H) (x >= 0 && x < H)
 
-#define THREADS_FORWARD 32
+#define THREADS_FORWARD 32 //should be multiple of 32
 
 namespace {
 template <typename scalar_t>
-__global__ void correlation_cuda_forward_kernel(
-    const TensorAcc4R rInput1,
-    const TensorAcc4R rInput2,
-    TensorAcc5R output,
-    int kH, int kW,
-    int patchH, int patchW,
-    int padH, int padW,
-    int dilation_patchH, int dilation_patchW,
-    int dH, int dW) {
+__global__ void max_convolution2d_cuda_forward_kernel(
+    const TensorAcc4R rInput,
+    const TensorAcc4R rWeight,
+    TensorAcc4R output1,
+    TensorAcc6R output2,
+    int padH, int padW) {
 
-  const int iH = rInput1.size(1);
-  const int iW = rInput1.size(2);
-  const int iC = rInput1.size(3);
+  const int iC = rInput.size(1);
+  const int iH = rInput.size(2);
+  const int iW = rInput.size(3);
+  const int kH = rWeight.size(2);
+  const int kW = rWeight.size(3);
 
+  // independent, large dimensions to be paralllized: oC, batch_size, oH, oW
   const int n = blockIdx.x;
-  const int h = blockIdx.y;
-  const int w = blockIdx.z;
+  const int oc = blockIdx.y;
+  const int h = blockIdx.z;
   const int thread = threadIdx.x;
 
-  const int start_i = -padH + h * dH;
-  const int start_j = -padW + w * dW;
-
-  const int patchRadH = dilation_patchH * (patchH - 1) / 2;
-  const int patchRadW = dilation_patchW * (patchW - 1) / 2;
-
-  __shared__ scalar_t prod_sum[THREADS_FORWARD];
-
-  for(int ph = 0; ph < patchH; ++ph){
-    int ph_dilated = ph * dilation_patchH - patchRadH;
-    for(int pw = 0; pw < patchW; ++pw){
-      int pw_dilated = pw * dilation_patchW - patchRadW;
-      prod_sum[thread] = 0;
-      for (int i=0; i<kH; ++i){
-        int i1 = start_i + i;
-        int i2 = i1 + ph_dilated;
-        if WITHIN_BOUNDS(i1, i2, iH, iH){
-          for (int j=0; j<kW; ++j){
-            int j1 = start_j + j;
-            int j2 = j1 + pw_dilated;
-            if WITHIN_BOUNDS(j1, j2, iW, iW){
-              for (int c=thread; c<C; c += THREADS_FORWARD){
-                scalar_t v1 = rInput1[n][i1][j1][c];
-                scalar_t v2 = rInput2[n][i2][j2][c];
-                prod_sum[thread] += v1 * v2;
+  for (w=thread; w<oW, w += THREADS_FORWARD){
+    scalar_t max_p;
+    scalar_t p;
+    torch::Tensor interim_max = torch::zeros({kH,kW});
+    torch::Tensor interim_argmax = torch::zeros({kH,kW});
+    scalar_t interim_sum;
+    interim_sum = 0;
+    for (int i=0; i<kH; ++i){
+      int ii = h * kH + i - padH;
+      if WITHIN_BOUNDS(ii, iH){
+        for (int j=0; j<kW; ++j){
+          int ij = w * kW + j -padW;
+          if WITHIN_BOUNDS(ij, iW){
+            max_p = - std::numeric_limits<float>::infinity();
+            for (int c=0; c<C; ++c){
+              scalar_t inp = rInput[n][c][ii][ij];
+              scalar_t wei = rWeight[oc][c][i][j];
+              p = inp + wei;
+              if (p > max_p){
+                max_p = p;
+                interim_max[i][j] = p;
+                interim_argmax[i][j] = c;
               }
             }
           }
         }
       }
-      // accumulate
-      __syncthreads();
-      if (thread == 0) {
-        scalar_t reduce_sum = 0;
-        for (int index = 0; index < THREADS_FORWARD; ++index) {
-          reduce_sum += prod_sum[index];
-        }
-        output[n][ph][pw][h][w] = reduce_sum;
+    }
+    output2[b][oc][h][w] = interim_argmax.packed_accessor<scalar_t,2,RestrictPtrTraits,int32_t>();
+    auto interim_max_acc = interim_max.packed_accessor<scalar_t,2,RestrictPtrTraits,int32_t>();
+    for (int i=0; i<kH; ++i){
+      for (int j=0; j<kW; ++j){
+         interim_sum += interim_max_acc[i][j];
       }
     }
+    output1[b][oc][h][w] =  interim_sum;
   }
+  // accumulate
+  __syncthreads();
 }
 
 
-torch::Tensor correlation_cuda_forward(
+std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cuda_forward(
     torch::Tensor input,
     torch::Tensor weight,
-    int kH, int kW,
     int padH, int padW) {
 
   const int batch_size = input.size(0);
@@ -94,28 +91,28 @@ torch::Tensor correlation_cuda_forward(
   const int iW = input.size(3);
 
   const int oC = weight.size(0);
-  const int kH = weight.size();
-  const int kW = weight.size(2);
+  const int kH = weight.size(2);
+  const int kW = weight.size(3);
 
-  const auto oH = (iH + 2 * padH) / kH;
-  const auto oW = (iW + 2 * padW) / kW;
+  const int oH = (iH + 2 * padH) / kH;
+  const int oW = (iW + 2 * padW) / kW;
   auto output1 = torch::zeros({batch_size, oC, oH, oW}, input.options());
   auto output2 = torch::zeros({batch_size, oC, oH, oW, kH, kW}, input.options());
 
-  auto trInput = input.permute({0, 2, 3, 1}).contiguous();
-  auto trInput2 = input2.permute({0, 2, 3, 1}).contiguous();
+  auto rInput = input.contiguous();
+  auto rWeight = weight.contiguous();
 
   const int threads = THREADS_FORWARD;
-  const dim3 blocks(batch_size, oH, oW);
+  const dim3 blocks(batch_size, oC, oH);
 
-  AT_DISPATCH_FLOATING_TYPES(input1.type(), "max_convolution2d_forward_cuda", ([&] {
-    TensorAcc4R trInput1_acc  = trInput1.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
-    TensorAcc4R trInput2_acc = trInput2.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
-    TensorAcc5R output_acc = output.packed_accessor<scalar_t,5,RestrictPtrTraits,int32_t>();
-    correlation_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
-        trInput1_acc, trInput2_acc, output_acc,
-        kH, kW, padH, padW);
+  AT_DISPATCH_FLOATING_TYPES(input.type(), "max_convolution2d_forward_cuda", ([&] {
+    TensorAcc4R rInput_acc  = rInput.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
+    TensorAcc4R rWeight_acc = rWeight.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
+    TensorAcc4R output1_acc = output1.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
+    TensorAcc4R output2_acc = output2.packed_accessor<scalar_t,6,RestrictPtrTraits,int32_t>();
+    max_convolution2d_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
+        rInput_acc, rWeight_acc, output1_acc, output2_acc, padH, padW);
   }));
 
-  return output;
+  return std::make_pair (output1, output2);
 }
