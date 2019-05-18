@@ -10,13 +10,13 @@ using namespace at;
 
 // Cuda tensor accessor definitions
 // restrict pointer traits piroritize speed over memory consumption
+#define TensorAcc3R PackedTensorAccessor<scalar_t,3,RestrictPtrTraits,int32_t>
 #define TensorAcc4R PackedTensorAccessor<scalar_t,4,RestrictPtrTraits,int32_t>
 #define TensorAcc5R PackedTensorAccessor<scalar_t,5,RestrictPtrTraits,int32_t>
+#define TensorAcc6R PackedTensorAccessor<scalar_t,6,RestrictPtrTraits,int32_t>
 #define WITHIN_BOUNDS(x, y, H, W) (x >= 0 && x < H && y >= 0 && y < W)
 
 #define THREADS_FORWARD 32
-#define THREADS_BACKWARD 5
-
 
 namespace {
 template <typename scalar_t>
@@ -29,10 +29,10 @@ __global__ void correlation_cuda_forward_kernel(
     int padH, int padW,
     int dilation_patchH, int dilation_patchW,
     int dH, int dW) {
-  
+
   const int iH = rInput1.size(1);
   const int iW = rInput1.size(2);
-  const int C = rInput1.size(3);
+  const int iC = rInput1.size(3);
 
   const int n = blockIdx.x;
   const int h = blockIdx.y;
@@ -69,7 +69,7 @@ __global__ void correlation_cuda_forward_kernel(
           }
         }
       }
-      // accumulate 
+      // accumulate
       __syncthreads();
       if (thread == 0) {
         scalar_t reduce_sum = 0;
@@ -84,36 +84,37 @@ __global__ void correlation_cuda_forward_kernel(
 
 
 torch::Tensor correlation_cuda_forward(
-    torch::Tensor input1,
-    torch::Tensor input2,
+    torch::Tensor input,
+    torch::Tensor weight,
     int kH, int kW,
-    int patchH, int patchW,
-    int padH, int padW,
-    int dilation_patchH, int dilation_patchW,
-    int dH, int dW) {
-  
-  const int batch_size = input1.size(0);
-  const int iH = input1.size(2);
-  const int iW = input1.size(3);
+    int padH, int padW) {
 
-  const auto oH = (iH + 2 * padH - kH) / dH + 1;
-  const auto oW = (iW + 2 * padW - kW) / dW + 1;
-  auto output = torch::zeros({batch_size, patchH, patchW, oH, oW}, input1.options());
-  
-  auto trInput1 = input1.permute({0, 2, 3, 1}).contiguous();
+  const int batch_size = input.size(0);
+  const int iH = input.size(2);
+  const int iW = input.size(3);
+
+  const int oC = weight.size(0);
+  const int kH = weight.size();
+  const int kW = weight.size(2);
+
+  const auto oH = (iH + 2 * padH) / kH;
+  const auto oW = (iW + 2 * padW) / kW;
+  auto output1 = torch::zeros({batch_size, oC, oH, oW}, input.options());
+  auto output2 = torch::zeros({batch_size, oC, oH, oW, kH, kW}, input.options());
+
+  auto trInput = input.permute({0, 2, 3, 1}).contiguous();
   auto trInput2 = input2.permute({0, 2, 3, 1}).contiguous();
-  
+
   const int threads = THREADS_FORWARD;
   const dim3 blocks(batch_size, oH, oW);
 
-  AT_DISPATCH_FLOATING_TYPES(input1.type(), "correlation_forward_cuda", ([&] {
+  AT_DISPATCH_FLOATING_TYPES(input1.type(), "max_convolution2d_forward_cuda", ([&] {
     TensorAcc4R trInput1_acc  = trInput1.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
     TensorAcc4R trInput2_acc = trInput2.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
     TensorAcc5R output_acc = output.packed_accessor<scalar_t,5,RestrictPtrTraits,int32_t>();
     correlation_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
         trInput1_acc, trInput2_acc, output_acc,
-        kH, kW, patchH, patchW, padH, padW,
-        dilation_patchH, dilation_patchW, dH, dW);
+        kH, kW, padH, padW);
   }));
 
   return output;

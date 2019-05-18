@@ -33,14 +33,12 @@ std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_sample_forward(
   if (input.type().is_cuda()){
     CHECK_INPUT(input);
     CHECK_INPUT(weight);
-    
+
     return max_convolution2d_cuda_forward(input, weight,
-                             kH, kW,
-                             padH, padW);
+                             kH, kW, padH, padW);
   }else{
     return max_convolution2d_cpp_forward(input, weight,
-                             kH, kW,
-                             padH, padW);
+                             kH, kW, padH, padW);
   }
 }
 
