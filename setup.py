@@ -21,9 +21,9 @@ setup(
     url="https://github.com/KarenUllrich/Pytorch-MaxConvolution-extension",
     install_requires=['torch>=1.0.1','numpy'],
     ext_modules=[
-        CUDAExtension('max_convolution2d_sampler_backend',
+        CUDAExtension('MaxConvolutionCuda',
                       sources,
-                      extra_compile_args={'cxx': ['-fopenmp'], 'nvcc':[]},
+                      extra_compile_args={'cxx': ['-fopenmp'], 'nvcc':['--expt-relaxed-constexpr', '-arch=sm_61']},
                       extra_link_args=['-lgomp'])
     ],
     package_dir={'': project_root},

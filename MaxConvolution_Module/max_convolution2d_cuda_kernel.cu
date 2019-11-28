@@ -17,71 +17,67 @@ using namespace at;
 #define WITHIN_BOUNDS(x, H) (x >= 0 && x < H)
 
 #define THREADS_FORWARD 32 //should be multiple of 32
+#define CUDA_KERNEL_LOOP(i, n) \
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); i += blockDim.x * gridDim.x)
+
+// Use 1024 threads per block, which requires cuda sm_2x or above
+constexpr int CUDA_NUM_THREADS = 1024;
+
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS(const int N)
+{
+  AT_ASSERTM(N > 0, "CUDA kernel launch blocks must be positive, but got N=", N);
+  return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
+}
 
 namespace {
 template <typename scalar_t>
 __global__ void max_convolution2d_cuda_forward_kernel(
+    const int total_threads,
     const TensorAcc4R rInput,
     const TensorAcc4R rWeight,
     TensorAcc4R output1,
     TensorAcc6R output2,
-    int padH, int padW, int oW) {
+    int padH, int padW) {
 
   const int iC = rInput.size(1);
   const int iH = rInput.size(2);
   const int iW = rInput.size(3);
-  const int kH = rWeight.size(2);
-  const int kW = rWeight.size(3);
 
-  // independent, large dimensions to be paralllized: oC, batch_size, oH, oW
-  const int n = blockIdx.x;
-  const int oc = blockIdx.y;
-  const int h = blockIdx.z;
-  const int thread = threadIdx.x;
+  const int oC = output2.size(1);
+  const int oH = output2.size(2);
+  const int oW = output2.size(3);
+  const int kH = output2.size(4);
+  const int kW = output2.size(5);
 
-  for (int w=thread; w<oW; w += THREADS_FORWARD){
-    scalar_t max_p;
-    scalar_t p;
-    torch::Tensor interim_max = torch::zeros({kH,kW});
-    torch::Tensor interim_argmax = torch::zeros({kH,kW});
-    scalar_t interim_sum;
-    interim_sum = 0;
-    for (int i=0; i<kH; ++i){
-      int ii = h * kH + i - padH;
-      if WITHIN_BOUNDS(ii, iH){
-        for (int j=0; j<kW; ++j){
-          int ij = w * kW + j -padW;
-          if WITHIN_BOUNDS(ij, iW){
-            max_p = - std::numeric_limits<float>::infinity(); // TODO REPLace this!!!
-            for (int c=0; c<iC; ++c){
-              scalar_t inp = rInput[n][c][ii][ij];
-              scalar_t wei = rWeight[oc][c][i][j];
-              p = inp + wei;
-              if (p > max_p){
-                max_p = p;
-                interim_max[i][j] = p;
-                interim_argmax[i][j] = c;
-              }
-            }
-          }
-        }
-      }
-    }
-    output2[n][oc][h][w] = interim_argmax.packed_accessor<scalar_t,2,RestrictPtrTraits,int32_t>();
-    auto interim_max_acc = interim_max.packed_accessor<scalar_t,2,RestrictPtrTraits,int32_t>();
-    for (int i=0; i<kH; ++i){
-      for (int j=0; j<kW; ++j){
-         interim_sum += interim_max_acc[i][j];
-      }
-    }
-    output1[n][oc][h][w] =  interim_sum;
+  CUDA_KERNEL_LOOP(index, total_threads) {
+    const int oc = index % oC;
+    const int h = (index / oC) % iH;
+    const int w = index / (oC * iH) % iW;
+    const int n = index / (oC * iH * iW);
+    const int kh = h % kH;
+    const int kw = w % kW;
+    const int oh = h / kH;
+    const int ow = w / kW;
+
+    float max_p = - std::numeric_limits<scalar_t>::infinity(); // TODO REPLace this!!!
+    for (int c=0; c<iC; ++c){
+      const scalar_t p = rInput[n][c][h][w] + rWeight[oc][c][kh][kw];
+      if (p > max_p){
+        max_p = p;
+        output2[n][oc][oh][ow][kh][kw] = c;
+       }
+     }
+
+    // __syncthreads();
+    atomicAdd(&output1[n][oc][oh][ow], max_p);
   }
-  // accumulate
-  __syncthreads();
+
+    }
 }
 
 
-std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cuda_forward(
+std::vector<torch::Tensor> max_convolution2d_cuda_forward(
     torch::Tensor input,
     torch::Tensor weight,
     int padH, int padW) {
@@ -102,17 +98,18 @@ std::tuple<torch::Tensor, torch::Tensor> max_convolution2d_cuda_forward(
   auto rInput = input.contiguous();
   auto rWeight = weight.contiguous();
 
-  const int threads = THREADS_FORWARD;
-  const dim3 blocks(batch_size, oC, oH);
+  int total_threads = static_cast<int>(batch_size * oC * iW * iH);
 
   AT_DISPATCH_FLOATING_TYPES(input.type(), "max_convolution2d_cuda_forward", ([&] {
     TensorAcc4R rInput_acc  = rInput.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
     TensorAcc4R rWeight_acc = rWeight.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
     TensorAcc4R output1_acc = output1.packed_accessor<scalar_t,4,RestrictPtrTraits,int32_t>();
     TensorAcc6R output2_acc = output2.packed_accessor<scalar_t,6,RestrictPtrTraits,int32_t>();
-    max_convolution2d_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
-        rInput_acc, rWeight_acc, output1_acc, output2_acc, padH, padW, oW);
+    max_convolution2d_cuda_forward_kernel<scalar_t>
+    <<<GET_BLOCKS(total_threads), CUDA_NUM_THREADS>>>(
+        total_threads, rInput_acc, rWeight_acc, output1_acc, output2_acc, padH, padW);
   }));
 
-  return std::make_pair (output1, output2);
+  return {output1, output2};
 }
+// }
